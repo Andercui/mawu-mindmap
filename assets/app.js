@@ -43,7 +43,10 @@
     });
     m.defaultCollapsed = () => {
       const s = new Set();
-      m.nodes.forEach(n => { if (n.depth >= 2 && n.kids.length) s.add(n.id); });
+      m.nodes.forEach(n => {
+        /* “世界的多样性”一节默认展开，让右侧关系图开屏可见 */
+        if (n.depth >= 2 && n.kids.length && n.id !== 'c1b') s.add(n.id);
+      });
       return s;
     };
   });
@@ -219,7 +222,8 @@
   function buildSubLayouts() {
     subLayouts = {};
     mainMap.nodes.forEach(n => {
-      if (!n.sub || !st.openSubs.has(n.id)) return;
+      if (!n.sub) return;
+      if (st.collapsed.has(n.id)) return;      /* 这一节收起时不显示关系图 */
       const sm = MAPS[n.sub];
       if (!sm) return;
       const lay = layoutMap(sm, new Set(), SUB_VGAP, SUB_HGAP, null, true);
@@ -228,7 +232,7 @@
       subLayouts[n.id] = {
         map: sm, layout: lay, items,
         boxW: Math.max(lay.width, railW) + SUB_PAD * 2,
-        boxH: lay.height + SUB_PAD * 2 + SUB_TITLE_H
+        boxH: lay.height + SUB_PAD * 2 + SUB_TITLE_H + 26
       };
     });
   }
@@ -236,7 +240,7 @@
   /* ---------- 绘制 ---------- */
   function render() {
     buildSubLayouts();
-    currentLayout = layoutMap(mainMap, st.collapsed, V_GAP, H_GAP, subLayouts);
+    currentLayout = layoutMap(mainMap, st.collapsed, V_GAP, H_GAP, null);
     const { vis, pos } = currentLayout;
 
     vpG.textContent = '';
@@ -257,34 +261,37 @@
     const railRight = drawLinks(gLink, laneify(mainMap, currentLayout), 0, 0);
     if (railRight > currentLayout.width) currentLayout.width = railRight;
 
-    /* 右侧内嵌二维子图 */
-    let subRight = 0;
+    /* 主图右侧空白区：该节元素的二维关系视图 */
+    let panelRight = currentLayout.width, panelBottom = currentLayout.height;
     vis.forEach(n => {
       const box = subLayouts[n.id];
       if (!box) return;
       const p = pos[n.id];
-      const bx = p.x + n.w + SUB_GAP_X;
+      const bx = currentLayout.width + 90;
       const by = p.y - box.boxH / 2;
-      subRight = Math.max(subRight, bx + box.boxW);
+      panelRight = Math.max(panelRight, bx + box.boxW);
+      panelBottom = Math.max(panelBottom, by + box.boxH);
 
       const g = el('g');
       g.appendChild(el('rect', {
         x: bx, y: by, width: box.boxW, height: box.boxH, rx: 14,
         fill: '#f8fafc', stroke: '#cbd5e1', 'stroke-dasharray': '6 5'
       }));
-      g.appendChild(el('path', {
-        d: `M${p.x + n.w},${p.y} L${bx},${p.y}`,
-        stroke: '#cbd5e1', 'stroke-width': 1.4
-      }));
 
       const title = el('text', {
-        x: bx + SUB_PAD, y: by + 20, fill: '#475569',
+        x: bx + SUB_PAD, y: by + 20, fill: '#334155',
         'font-size': 12, 'font-weight': 700
       });
-      title.textContent = '子图 · ' + box.map.title;
+      title.textContent = '关系视图 · ' + box.map.title;
       g.appendChild(title);
 
-      const ox = bx + SUB_PAD, oy = by + SUB_TITLE_H + SUB_PAD;
+      const cap = el('text', {
+        x: bx + SUB_PAD, y: by + 34, fill: '#94a3b8', 'font-size': 10.5
+      });
+      cap.textContent = '对应左侧同一节，仅展示要素之间的关系（非层级）';
+      g.appendChild(cap);
+
+      const ox = bx + SUB_PAD, oy = by + SUB_TITLE_H + SUB_PAD + 26;
       box.layout.vis.forEach(sn => {
         const sp = box.layout.pos[sn.id];
         if (st.collapsed.has(sn.id)) return;
@@ -297,15 +304,16 @@
         });
       });
       const subRail = drawLinks(g, box.items, ox, oy);
-      if (subRail) subRight = Math.max(subRight, ox + subRail);
+      if (subRail) panelRight = Math.max(panelRight, ox + subRail);
       gSub.appendChild(g);
 
       box.layout.vis.forEach(sn => {
         const sp = box.layout.pos[sn.id];
-        gNode.appendChild(makeNode(sn, ox + sp.x, oy + sp.y, box.map.id));
+        gNode.appendChild(makeNode(sn, ox + sp.x, oy + sp.y, 'main'));
       });
     });
-    if (subRight > currentLayout.width) currentLayout.width = subRight;
+    currentLayout.width = Math.max(currentLayout.width, panelRight);
+    currentLayout.height = Math.max(currentLayout.height, panelBottom);
 
     vis.forEach(n => {
       const p = pos[n.id];
@@ -335,34 +343,26 @@
     g.appendChild(tx);
 
     const expandable = n.kids.length > 0;
-    const drill = !!n.sub;
-    if (expandable || drill) {
-      const isOpen = drill ? st.openSubs.has(n.id) : !st.collapsed.has(n.id);
-      const tog = el('g', { transform: `translate(${n.w - 10},${NODE_H / 2})` },
-        'tog' + (drill && !isOpen ? ' sub' : ''));
+    if (expandable) {
+      const isOpen = !st.collapsed.has(n.id);
+      const tog = el('g', { transform: `translate(${n.w - 10},${NODE_H / 2})` }, 'tog');
       tog.appendChild(el('rect', { x: -11, y: -13, width: 22, height: 26 }));
       const glyph = el('text');
-      glyph.textContent = isOpen ? '−' : (drill ? '›' : '+');
+      glyph.textContent = isOpen ? '−' : '+';
       tog.appendChild(glyph);
       const ttl = el('title');
-      ttl.textContent = drill
-        ? (isOpen ? '收起子图' : '在右侧展开二维子图')
+      ttl.textContent = n.sub
+        ? (isOpen ? '收起本节与右侧关系图' : '展开本节，右侧显示关系图')
         : (isOpen ? '收起' : '展开');
       tog.appendChild(ttl);
 
       tog.addEventListener('click', ev => {
         ev.stopPropagation();
         if (moved) return;
-        if (drill) {
-          const willOpen = !st.openSubs.has(n.id);
-          if (willOpen) st.openSubs.add(n.id); else st.openSubs.delete(n.id);
-          render();
-          if (willOpen) revealSub(n.id); else fit();
-          return;
-        }
         const oldY = y;
         if (st.collapsed.has(n.id)) st.collapsed.delete(n.id); else st.collapsed.add(n.id);
         render();
+        if (n.sub) { fit(); return; }        /* 关系图出现/消失，整体重排 */
         const np = currentLayout.pos[n.id];
         if (np) { st.vp.y += (oldY - np.y) * st.vp.k; applyVp(); }
       });
@@ -379,10 +379,10 @@
 
   function updateStat() {
     const shown = currentLayout ? currentLayout.vis.length : mainMap.nodes.length;
-    const subs = st.openSubs.size;
+    const panels = Object.keys(subLayouts).length;
     document.getElementById('stat').textContent =
       `${mainMap.nodes.length} 节点 / ${mainMap.links.length} 关系 · 可见 ${shown}` +
-      (subs ? ` · 子图 ${subs}` : '');
+      (panels ? ' · 关系图 1' : '');
   }
 
   /* ---------- 详情卡 ---------- */
@@ -414,9 +414,9 @@
 
     let html = '';
     if (n.sub) {
-      const open = st.openSubs.has(n.id);
-      html += `<div class="sec"><button class="goto" data-toggle-sub="${n.id}">` +
-        (open ? '收起右侧子图' : '在右侧展开子图：' + MAPS[n.sub].title) + '</button></div>';
+      const open = !st.collapsed.has(n.id);
+      html += `<div class="sec"><button class="goto" data-toggle-node="${n.id}">` +
+        (open ? '收起本节（同时收起右侧关系图）' : '展开本节 · 右侧显示关系图') + '</button></div>';
     }
     if (n.pr) html += `<div class="sec"><h4>一句话原理</h4><p>${n.pr}</p></div>`;
     if (n.pts && n.pts.length)
@@ -427,13 +427,12 @@
 
     const body = document.getElementById('pBody');
     body.innerHTML = html;
-    const btn = body.querySelector('[data-toggle-sub]');
+    const btn = body.querySelector('[data-toggle-node]');
     if (btn) btn.addEventListener('click', () => {
-      const pid = btn.dataset.toggleSub;
-      const willOpen = !st.openSubs.has(pid);
-      if (willOpen) st.openSubs.add(pid); else st.openSubs.delete(pid);
+      const pid = btn.dataset.toggleNode;
+      if (st.collapsed.has(pid)) st.collapsed.delete(pid); else st.collapsed.add(pid);
       render();
-      if (willOpen) revealSub(pid); else fit();
+      fit();
     });
 
     render();
@@ -483,10 +482,9 @@
 
   function revealSub(hostId) {
     const box = subLayouts[hostId];
-    const p = currentLayout && currentLayout.pos[hostId];
-    if (!box || !p) { fit(); return; }
-    const bx = p.x + mainMap.byId[hostId].w + SUB_GAP_X;
-    ensureVisible(bx, p.y - box.boxH / 2, bx + box.boxW, p.y + box.boxH / 2);
+    if (!box) return;
+    const bx = currentLayout.width - box.boxW;
+    ensureVisible(bx, 0, bx + box.boxW, currentLayout.height);
   }
 
   function zoomAt(mx, my, k2) {
@@ -565,43 +563,21 @@
     st.hits = new Set();
     if (!q) { render(); return; }
 
-    let target = null, targetMap = null;
+    let target = null;
     mainMap.nodes.forEach(n => {
       if (n.t.indexOf(q) >= 0 || (n.pr && n.pr.indexOf(q) >= 0)) {
         st.hits.add(n.id);
         let c = n;
         while (c && c.p) { st.collapsed.delete(c.p); c = mainMap.byId[c.p]; }
-        if (!target) { target = n; targetMap = 'main'; }
+        if (!target) target = n;
       }
-    });
-    mainMap.nodes.forEach(host => {
-      if (!host.sub || !MAPS[host.sub]) return;
-      MAPS[host.sub].nodes.forEach(n => {
-        if (n.t.indexOf(q) >= 0 || (n.pr && n.pr.indexOf(q) >= 0)) {
-          st.hits.add(n.id);
-          st.openSubs.add(host.id);
-          if (!target) { target = n; targetMap = host.sub; }
-        }
-      });
     });
 
     render();
     if (target) {
-      let x = 0, y = 0;
-      if (targetMap === 'main') {
-        const p = currentLayout.pos[target.id];
-        if (p) { x = p.x; y = p.y; }
-      } else {
-        const host = mainMap.nodes.find(h => h.sub === targetMap);
-        const hp = host && currentLayout.pos[host.id];
-        const box = host && subLayouts[host.id];
-        if (hp && box && box.layout.pos[target.id]) {
-          x = hp.x + host.w + SUB_GAP_X + SUB_PAD + box.layout.pos[target.id].x;
-          y = hp.y - box.boxH / 2 + SUB_TITLE_H + SUB_PAD + box.layout.pos[target.id].y;
-        }
-      }
-      centerAt(x, y);
-      select(targetMap, target.id);
+      const p = currentLayout.pos[target.id];
+      if (p) centerAt(p.x, p.y);
+      select('main', target.id);
     }
   });
 

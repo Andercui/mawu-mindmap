@@ -312,3 +312,16 @@ const MAPS = {
     ]
   }
 };
+
+
+/* ---------------------------------------------------------------
+   把“考点 8—16”这 9 个节点同时挂回主图（深拷贝，避免两个 map 共用对象），
+   主图保留层级结构；它们的相互关系由右侧「关系图」呈现。            */
+MAPS.sub1.nodes
+  .filter(n => n.p)
+  .forEach(n => {
+    const copy = {};
+    for (const k in n) copy[k] = n[k];
+    copy.p = 'c1b';
+    MAPS.main.nodes.push(copy);
+  });
