@@ -226,6 +226,31 @@
       if (st.collapsed.has(n.id)) return;      /* 这一节收起时不显示关系图 */
       const sm = MAPS[n.sub];
       if (!sm) return;
+
+      if (sm.nodes.some(x => x.pos)) {
+        /* ---- 手排二维坐标 ---- */
+        const pos = {}, vis = [];
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+        sm.nodes.forEach(x => {
+          if (!x.pos) return;
+          const px = x.pos[0] - x.w / 2, py = x.pos[1];
+          pos[x.id] = { x: px, y: py };
+          vis.push(x);
+          minX = Math.min(minX, px);
+          maxX = Math.max(maxX, px + x.w);
+          minY = Math.min(minY, py - NODE_H / 2);
+          maxY = Math.max(maxY, py + NODE_H / 2);
+        });
+        Object.keys(pos).forEach(k => { pos[k].x -= minX; pos[k].y -= minY; });
+        const lay = { vis, pos, width: maxX - minX, height: maxY - minY };
+        subLayouts[n.id] = {
+          map: sm, layout: lay, manual: true,
+          boxW: lay.width + SUB_PAD * 2,
+          boxH: lay.height + SUB_PAD * 2 + SUB_TITLE_H + 26
+        };
+        return;
+      }
+
       const lay = layoutMap(sm, new Set(), SUB_VGAP, SUB_HGAP, null, true);
       const items = laneify(sm, lay);
       const railW = drawLinks(el('g'), items, 0, 0);   /* 只测量不显示 */
@@ -235,6 +260,89 @@
         boxH: lay.height + SUB_PAD * 2 + SUB_TITLE_H + 26
       };
     });
+  }
+
+  /* 二维关系图：节点中心 → 节点中心，直线 + 边框裁切；双向关系并行错开 */
+  function boxCenter(node, p, ox, oy) {
+    return { cx: ox + p.x + node.w / 2, cy: oy + p.y, w: node.w + 2, h: NODE_H + 2 };
+  }
+  function borderPoint(from, to) {
+    const dx = to.cx - from.cx, dy = to.cy - from.cy;
+    const adx = Math.abs(dx), ady = Math.abs(dy);
+    if (adx < 0.001 && ady < 0.001) return { x: from.cx, y: from.cy };
+    const s = Math.min(adx ? (from.w / 2) / adx : Infinity, ady ? (from.h / 2) / ady : Infinity);
+    return { x: from.cx + dx * s, y: from.cy + dy * s };
+  }
+  function drawConceptLinks(g, sm, layout, ox, oy) {
+    const links = [];
+    const seen = {};
+    sm.links.forEach(L => {
+      const s = sm.byId[L.a], t = sm.byId[L.b];
+      if (!s || !t) return;
+      const ps = layout.pos[s.id], pt = layout.pos[t.id];
+      if (!ps || !pt) return;
+      const key = [s.id, t.id].sort().join('|');
+      seen[key] = (seen[key] || 0) + 1;
+      links.push({ L, s, t, ps, pt, key, seq: seen[key] - 1, total: 0 });
+    });
+    const counts = {};
+    links.forEach(o => { counts[o.key] = Math.max(counts[o.key] || 0, o.seq + 1); });
+
+    const pending = [];
+    let maxRight = 0;
+    links.forEach(o => {
+      const a = boxCenter(o.s, o.ps, ox, oy);
+      const b = boxCenter(o.t, o.pt, ox, oy);
+      const p1 = borderPoint(a, b);
+      const p2 = borderPoint(b, a);
+
+      /* 双向关系：两条线分别向两侧偏移，形成平行箭头 */
+      const pairN = counts[o.key];
+      const off = pairN > 1 ? (o.seq === 0 ? 7 : -7) : 0;
+      const t = pairN > 1 ? (o.seq === 0 ? 0.38 : 0.62) : 0.5;
+      const dx = b.cx - a.cx, dy = b.cy - a.cy, len = Math.hypot(dx, dy) || 1;
+      const nx = -dy / len, ny = dx / len;
+      const q1 = { x: p1.x + nx * off, y: p1.y + ny * off };
+      const q2 = { x: p2.x + nx * off, y: p2.y + ny * off };
+
+      const kind = KIND[o.L.k] || KIND.prog;
+      const path = el('path', {
+        d: `M${q1.x},${q1.y} L${q2.x},${q2.y}`,
+        stroke: kind.color,
+        'stroke-dasharray': kind.dash,
+        'marker-end': 'url(#arw-' + o.L.k + ')'
+      }, 'clink' + (linkVisible[o.L.k] ? '' : ' off'));
+      const ttl = el('title'); ttl.textContent = o.L.l; path.appendChild(ttl);
+      g.appendChild(path);
+
+      pending.push({
+        text: o.L.l, color: kind.color, kind: o.L.k,
+        x: q1.x + (q2.x - q1.x) * t + nx * (off >= 0 ? 9 : -9),
+        y: q1.y + (q2.y - q1.y) * t + ny * (off >= 0 ? 9 : -9) - 3,
+        w: mctx.measureText(o.L.l).width
+      });
+      maxRight = Math.max(maxRight, q2.x, q1.x);
+    });
+
+    /* 标签防重叠 */
+    pending.sort((a, b) => a.y - b.y);
+    const placed = [];
+    pending.forEach(L => {
+      let x = L.x - L.w / 2;
+      for (let guard = 0; guard < 12; guard++) {
+        const hit = placed.find(P =>
+          x < P.x + P.w + 6 && P.x < x + L.w + 6 && L.y - 11 < P.y + 6 && P.y < L.y + 11);
+        if (!hit) break;
+        x = hit.x + hit.w + 10;
+      }
+      placed.push({ x, y: L.y, w: L.w });
+      maxRight = Math.max(maxRight, x + L.w + 10);
+      const tx = el('text', { x, y: L.y, 'text-anchor': 'start', fill: L.color },
+        'clabel' + (linkVisible[L.kind] ? '' : ' off'));
+      tx.textContent = L.text;
+      g.appendChild(tx);
+    });
+    return maxRight - ox;
   }
 
   /* ---------- 绘制 ---------- */
@@ -292,19 +400,25 @@
       g.appendChild(cap);
 
       const ox = bx + SUB_PAD, oy = by + SUB_TITLE_H + SUB_PAD + 26;
-      box.layout.vis.forEach(sn => {
-        const sp = box.layout.pos[sn.id];
-        if (st.collapsed.has(sn.id)) return;
-        sn.kids.forEach(k => {
-          const kp = box.layout.pos[k.id];
-          if (!kp) return;
-          const x1 = ox + sp.x + sn.w, y1 = oy + sp.y;
-          const x2 = ox + kp.x, y2 = oy + kp.y, mx = (x1 + x2) / 2;
-          g.appendChild(el('path', { d: `M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2}` }, 'edge'));
+      if (box.manual) {
+        /* 手排二维布局：只画关系线，没有层级边 */
+        const subRail = drawConceptLinks(g, box.map, box.layout, ox, oy);
+        if (subRail) panelRight = Math.max(panelRight, ox + subRail);
+      } else {
+        box.layout.vis.forEach(sn => {
+          const sp = box.layout.pos[sn.id];
+          if (st.collapsed.has(sn.id)) return;
+          sn.kids.forEach(k => {
+            const kp = box.layout.pos[k.id];
+            if (!kp) return;
+            const x1 = ox + sp.x + sn.w, y1 = oy + sp.y;
+            const x2 = ox + kp.x, y2 = oy + kp.y, mx = (x1 + x2) / 2;
+            g.appendChild(el('path', { d: `M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2}` }, 'edge'));
+          });
         });
-      });
-      const subRail = drawLinks(g, box.items, ox, oy);
-      if (subRail) panelRight = Math.max(panelRight, ox + subRail);
+        const subRail = drawLinks(g, box.items, ox, oy);
+        if (subRail) panelRight = Math.max(panelRight, ox + subRail);
+      }
       gSub.appendChild(g);
 
       box.layout.vis.forEach(sn => {
@@ -595,6 +709,9 @@
   };
 
   /* ---------- 图例 ---------- */
+  document.getElementById('lgToggle').addEventListener('click', () => {
+    document.getElementById('legend').classList.toggle('collapsed');
+  });
   (function buildLegend() {
     const box = document.getElementById('lgRows');
     Object.keys(KIND).forEach(k => {

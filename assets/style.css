@@ -55,7 +55,12 @@ button.pri:hover{background:#0f172a}
   background:rgba(255,255,255,.94); border:1px solid var(--line); border-radius:12px;
   padding:9px 11px; font-size:12px; box-shadow:0 4px 16px rgba(15,23,42,.06);
 }
-#legend .lg-t{font-weight:700; margin-bottom:6px; color:#334155; font-size:11.5px}
+#legend .lg-t{font-weight:700; margin-bottom:6px; color:#334155; font-size:11.5px; cursor:pointer; user-select:none}
+#legend .lg-t .caret{color:#94a3b8; margin-left:2px}
+#legend.collapsed{padding:7px 10px}
+#legend.collapsed .lg-t{margin-bottom:0}
+#legend.collapsed #lgRows{display:none}
+#legend.collapsed .caret{transform:rotate(-90deg); display:inline-block}
 .lg-row{display:flex; align-items:center; gap:7px; margin:3px 0; cursor:pointer; user-select:none}
 .lg-row input{margin:0; accent-color:#475569}
 .lg-sw{width:24px; height:0; border-top-width:2px; border-top-style:solid}
