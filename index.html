@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>马克思主义哲学 · 思维导图（导论 + 第1—3章）</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<div id="app">
+  <div id="stage">
+    <svg id="svg"><g id="vp"></g></svg>
+
+    <div id="bar">
+      <h1>马克思主义哲学<small>导论 + 第1—3章</small></h1>
+      <div id="crumbs"><span class="cur">主图</span></div>
+      <span class="grow"></span>
+      <input id="q" placeholder="搜索概念（矛盾 / 真理 / 实践）">
+      <button id="btnFit">适应</button>
+      <button id="btnL2">总览</button>
+      <button id="btnAll">全展开</button>
+      <button id="btnZoomOut" title="缩小">−</button>
+      <button id="btnZoomIn" title="放大">+</button>
+      <span class="hint" id="stat"></span>
+    </div>
+
+    <div id="legend">
+      <div class="lg-t">关系图例（可点选隐藏）</div>
+      <div id="lgRows"></div>
+    </div>
+  </div>
+
+  <aside id="panel">
+    <div class="p-head">
+      <div class="crumb" id="crumb">马克思主义哲学</div>
+      <h2 class="p-title" id="pTitle">点击任意节点查看详情</h2>
+      <div class="chips" id="chips"></div>
+    </div>
+    <div class="p-body" id="pBody">
+      <div class="empty">
+        <b>操作</b><br>
+        滚轮 / 双指捏合缩放 · 拖动平移<br>
+        点节点看「一句话原理 + 要点 + 易错」<br>
+        点节点右侧 <kbd>+</kbd> / <kbd>−</kbd> 折叠展开<br>
+        点 <kbd>›</kbd> 进入子图（关系密集的章节单独成图）<br>
+        <span style="display:block;margin-top:12px;color:#94a3b8;font-size:12px">
+          底图虚线弧线是跨分支的逻辑关系，不是层级从属。
+        </span>
+      </div>
+    </div>
+  </aside>
+</div>
+
+<script src="assets/data.js"></script>
+<script src="assets/app.js"></script>
+</body>
+</html>
