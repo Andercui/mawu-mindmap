@@ -118,6 +118,9 @@ kbd{background:#f1f5f9; border:1px solid #e2e8f0; border-bottom-width:2px; borde
 .node:hover .tog.sub text{fill:#2563eb}
 
 /* ---------- 平板 / 窄屏：上下分栏 ---------- */
+@media (max-width: 600px){
+  #legend{display:none}
+}
 @media (max-width: 900px){
   #app{flex-direction:column}
   #panel{

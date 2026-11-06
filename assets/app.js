@@ -1,4 +1,4 @@
-/* 渲染引擎：tidy tree 布局 + 跨分支关系线 + 子图下钻 */
+/* 渲染引擎：tidy tree 布局 + 跨分支关系线 + 右侧内嵌二维子图 */
 (function () {
   'use strict';
 
@@ -20,6 +20,7 @@
   };
 
   const NODE_H = 30, V_GAP = 10, H_GAP = 66, PAD_X = 14, FS = 13;
+  const SUB_PAD = 16, SUB_TITLE_H = 26, SUB_GAP_X = 54, SUB_VGAP = 16, SUB_HGAP = 48;
   const SVGNS = 'http://www.w3.org/2000/svg';
 
   const svg = document.getElementById('svg');
@@ -29,7 +30,7 @@
   const mctx = document.createElement('canvas').getContext('2d');
   mctx.font = FS + 'px "Microsoft YaHei","PingFang SC",system-ui,sans-serif';
 
-  /* ---------- 预处理每张图 ---------- */
+  /* ---------- 预处理 ---------- */
   Object.keys(MAPS).forEach(key => {
     const m = MAPS[key];
     m.byId = {};
@@ -49,47 +50,19 @@
 
   /* ---------- 状态 ---------- */
   const st = {
-    map: 'main',
-    collapsed: new Set(),
-    selected: null,
+    collapsed: null,
+    openSubs: new Set(),
+    selected: { map: 'main', id: null },
     hits: new Set(),
     vp: { x: 0, y: 0, k: 1 }
   };
   const linkVisible = {};
   Object.keys(KIND).forEach(k => linkVisible[k] = true);
 
+  const mainMap = MAPS.main;
   let currentLayout = null;
+  let subLayouts = {};
   let fitPending = true;
-
-  const cur = () => MAPS[st.map];
-
-  /* ---------- 布局 ---------- */
-  function layout() {
-    const m = cur();
-    let cursor = 0;
-    const levelW = [];
-    const vis = [];
-    (function walk(n, d) {
-      n.d = d;
-      levelW[d] = Math.max(levelW[d] || 0, n.w);
-      const kids = st.collapsed.has(n.id) ? [] : n.kids;
-      let y;
-      if (!kids.length) { y = cursor + NODE_H / 2; cursor += NODE_H + (m.vgap || V_GAP); }
-      else {
-        const ys = kids.map(k => walk(k, d + 1));
-        y = (ys[0] + ys[ys.length - 1]) / 2;
-      }
-      n.y = y; vis.push(n);
-      return y;
-    })(m.byId[m.root], 0);
-
-    const levelX = [];
-    let x = 0;
-    for (let i = 0; i < levelW.length; i++) { levelX[i] = x; x += levelW[i] + H_GAP; }
-    vis.forEach(n => n.x = levelX[n.d]);
-
-    return { vis, width: x - H_GAP, height: Math.max(cursor, NODE_H) };
-  }
 
   const el = (tag, attrs, cls) => {
     const e = document.createElementNS(SVGNS, tag);
@@ -98,150 +71,337 @@
     return e;
   };
 
-  /* ---------- 绘制 ---------- */
-  function render() {
-    const m = cur();
-    currentLayout = layout();
-    const { vis, width, height } = currentLayout;
+  /* ---------- 布局：子图按“块”占位，宿主节点预留整块高度 ---------- */
+  function layoutMap(map, collapsedSet, vgap, hgap, subs, skipRoot) {
+    const pos = {}, vis = [], levelW = [];
+    let cursor = 0;
+    const start = skipRoot ? map.byId[map.root].kids : [map.byId[map.root]];
+    const baseDepth = skipRoot ? 0 : 0;
+    start.forEach(top => {
+      (function walk(n, d) {
+      levelW[d] = Math.max(levelW[d] || 0, n.w);
+      const kids = collapsedSet.has(n.id) ? [] : n.kids;
+      let y;
+      if (!kids.length) {
+        const box = subs && subs[n.id];
+        const bh = box ? Math.max(NODE_H, box.boxH) : NODE_H;
+        y = cursor + bh / 2;
+        cursor += bh + vgap;
+      } else {
+        const ys = kids.map(k => walk(k, d + 1));
+        y = (ys[0] + ys[ys.length - 1]) / 2;
+      }
+      pos[n.id] = { x: 0, y, d };
+      vis.push(n);
+      return y;
+      })(top, baseDepth);
+    });
 
-    vpG.textContent = '';
-    const gEdge = el('g'), gLink = el('g'), gNode = el('g');
-    vpG.append(gEdge, gLink, gNode);
+    const levelX = [];
+    let x = 0;
+    for (let i = 0; i < levelW.length; i++) { levelX[i] = x; x += levelW[i] + hgap; }
+    vis.forEach(n => { pos[n.id].x = levelX[pos[n.id].d]; });
 
-    vis.forEach(n => {
-      if (st.collapsed.has(n.id)) return;
-      n.kids.forEach(k => {
-        const x1 = n.x + n.w, y1 = n.y, x2 = k.x, y2 = k.y, mx = (x1 + x2) / 2;
-        gEdge.appendChild(el('path', { d: `M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2}` }, 'edge'));
+    return { vis, pos, width: x - hgap, height: Math.max(cursor, NODE_H) };
+  }
+
+  /* 关系线：同列走右侧“轨道弧”，按跨度分配轨道；反向关系标签上下错开 */
+  function laneify(map, layout) {
+    const items = [];
+    map.links.forEach(L => {
+      const s = map.byId[L.a], t = map.byId[L.b];
+      if (!s || !t) return;
+      const ps = layout.pos[s.id], pt = layout.pos[t.id];
+      if (!ps || !pt) return;
+      items.push({
+        L, s, t, ps, pt,
+        sameCol: Math.abs(ps.x - pt.x) < 1,
+        span: Math.abs(ps.y - pt.y)
       });
     });
+    const same = items.filter(o => o.sameCol).sort((p, q) => p.span - q.span);
+    same.forEach((o, i) => { o.bulge = 40 + i * 20 + Math.min(80, o.span * 0.16); });
 
-    /* 先算出每条关系的几何，再按跨度分配“轨道”，避免同列弧线互相压线 */
-    const drawn = [];
-    m.links.forEach(L => {
-      const s = m.byId[L.a], t = m.byId[L.b];
-      if (!s || !t) return;
-      if (vis.indexOf(s) < 0 || vis.indexOf(t) < 0) return;
-      const sameCol = Math.abs(s.x - t.x) < 1;
-      drawn.push({ L, s, t, sameCol, span: Math.abs(s.y - t.y) });
+    const byPair = {};
+    items.forEach(o => {
+      const key = [o.L.a, o.L.b].sort().join('|');
+      (byPair[key] = byPair[key] || []).push(o);
     });
+    Object.keys(byPair).forEach(k => {
+      const arr = byPair[k];
+      if (arr.length < 2) return;
+      /* 反向关系：两者方向相反，取同一 t 会自然落在弧的两端 */
+      arr.forEach(o => { o.tPos = 0.32; });
+    });
+    return items;
+  }
 
-    const same = drawn.filter(o => o.sameCol).sort((p, q) => p.span - q.span);
-    same.forEach((o, i) => { o.bulge = 44 + i * 20 + Math.min(90, o.span * 0.18); });
+  function bezPoint(P, t) {
+    const mt = 1 - t;
+    return {
+      x: mt * mt * mt * P[0].x + 3 * mt * mt * t * P[1].x + 3 * mt * t * t * P[2].x + t * t * t * P[3].x,
+      y: mt * mt * mt * P[0].y + 3 * mt * mt * t * P[1].y + 3 * mt * t * t * P[2].y + t * t * t * P[3].y
+    };
+  }
 
-    let railRight = 0;
-    drawn.forEach(o => {
+  function linkGeo(o, ox, oy) {
+    let P, anchor = 'middle';
+    if (o.sameCol) {
+      const x1 = ox + o.ps.x + o.s.w, y1 = oy + o.ps.y;
+      const x2 = ox + o.pt.x + o.t.w, y2 = oy + o.pt.y;
+      const b = o.bulge;
+      P = [{ x: x1, y: y1 }, { x: x1 + b, y: y1 }, { x: x2 + b, y: y2 }, { x: x2, y: y2 }];
+      anchor = 'start';
+    } else {
+      const x1 = ox + o.ps.x + o.s.w, y1 = oy + o.ps.y;
+      const x2 = ox + o.pt.x, y2 = oy + o.pt.y;
+      const dx = Math.max(60, Math.abs(x2 - x1) * 0.42);
+      P = [{ x: x1, y: y1 }, { x: x1 + dx, y: y1 }, { x: x2 - dx, y: y2 }, { x: x2, y: y2 }];
+    }
+    const L = bezPoint(P, o.tPos || 0.5);
+    return {
+      P, anchor,
+      lx: L.x + (anchor === 'start' ? 7 : 0),
+      ly: L.y + (anchor === 'start' ? 3 : -5),
+      d: `M${P[0].x},${P[0].y} C${P[1].x},${P[1].y} ${P[2].x},${P[2].y} ${P[3].x},${P[3].y}`
+    };
+  }
+
+  function drawLinks(g, items, ox, oy) {
+    const pending = [];
+    items.forEach(o => {
       const kind = KIND[o.L.k] || KIND.prog;
-      let d, lx, ly;
-      if (o.sameCol) {
-        const x1 = o.s.x + o.s.w, y1 = o.s.y, x2 = o.t.x + o.t.w, y2 = o.t.y;
-        const b = o.bulge;
-        d = `M${x1},${y1} C${x1 + b},${y1} ${x2 + b},${y2} ${x2},${y2}`;
-        lx = Math.max(x1, x2) + b * 0.72 + 6;
-        ly = (y1 + y2) / 2 + 3;
-        railRight = Math.max(railRight, lx + 90);
-      } else {
-        const x1 = o.s.x + o.s.w, y1 = o.s.y, x2 = o.t.x, y2 = o.t.y;
-        const dx = Math.max(60, Math.abs(x2 - x1) * 0.42);
-        d = `M${x1},${y1} C${x1 + dx},${y1} ${x2 - dx},${y2} ${x2},${y2}`;
-        lx = (x1 + x2) / 2;
-        ly = (y1 + y2) / 2 - 5;
-      }
+      const geo = linkGeo(o, ox, oy);
       const p = el('path', {
-        d,
+        d: geo.d,
         stroke: kind.color,
         'stroke-dasharray': kind.dash,
         'marker-end': 'url(#arw-' + o.L.k + ')'
       }, 'clink' + (linkVisible[o.L.k] ? '' : ' off'));
       const ttl = el('title'); ttl.textContent = o.L.l; p.appendChild(ttl);
-      gLink.appendChild(p);
+      g.appendChild(p);
 
-      if (o.span > 88) {
-        const tx = el('text', {
-          x: lx, y: ly, 'text-anchor': o.sameCol ? 'start' : 'middle', fill: kind.color
-        }, 'clabel' + (linkVisible[o.L.k] ? '' : ' off'));
-        tx.textContent = o.L.l;
-        gLink.appendChild(tx);
+      if (o.span > 70) {
+        pending.push({
+          text: o.L.l, color: kind.color, anchor: geo.anchor,
+          x: geo.lx, y: geo.ly, w: mctx.measureText(o.L.l).width,
+          kind: o.L.k
+        });
       }
     });
-    if (railRight > currentLayout.width) currentLayout.width = railRight;
+
+    /* 标签防重叠：按 y 排序，若与已放置标签相交就右移 */
+    pending.sort((a, b) => a.y - b.y);
+    const placed = [];
+    let railRight = 0;
+    pending.forEach(L => {
+      let x = L.x;
+      for (let guard = 0; guard < 12; guard++) {
+        const hit = placed.find(P =>
+          x < P.x + P.w + 8 && P.x < x + L.w + 8 &&
+          L.y - 12 < P.y + 8 && P.y < L.y + 12);
+        if (!hit) break;
+        x = hit.x + hit.w + 12;
+      }
+      const rect = { x, y: L.y, w: L.w };
+      placed.push(rect);
+      railRight = Math.max(railRight, x + L.w + 10);
+
+      const tx = el('text', {
+        x, y: L.y, 'text-anchor': L.anchor, fill: L.color
+      }, 'clabel' + (linkVisible[L.kind] ? '' : ' off'));
+      tx.textContent = L.text;
+      g.appendChild(tx);
+    });
+    return railRight;
+  }
+
+  function buildSubLayouts() {
+    subLayouts = {};
+    mainMap.nodes.forEach(n => {
+      if (!n.sub || !st.openSubs.has(n.id)) return;
+      const sm = MAPS[n.sub];
+      if (!sm) return;
+      const lay = layoutMap(sm, new Set(), SUB_VGAP, SUB_HGAP, null, true);
+      const items = laneify(sm, lay);
+      const railW = drawLinks(el('g'), items, 0, 0);   /* 只测量不显示 */
+      subLayouts[n.id] = {
+        map: sm, layout: lay, items,
+        boxW: Math.max(lay.width, railW) + SUB_PAD * 2,
+        boxH: lay.height + SUB_PAD * 2 + SUB_TITLE_H
+      };
+    });
+  }
+
+  /* ---------- 绘制 ---------- */
+  function render() {
+    buildSubLayouts();
+    currentLayout = layoutMap(mainMap, st.collapsed, V_GAP, H_GAP, subLayouts);
+    const { vis, pos } = currentLayout;
+
+    vpG.textContent = '';
+    const gEdge = el('g'), gLink = el('g'), gSub = el('g'), gNode = el('g');
+    vpG.append(gEdge, gLink, gSub, gNode);
 
     vis.forEach(n => {
-      const mod = MOD[n.m] || MOD.d;
-      const g = el('g', { transform: `translate(${n.x},${n.y - NODE_H / 2})` },
-        'node' + (st.selected === n.id ? ' sel' : '') + (n.m === 'ext' ? ' ext' : '') + (st.hits.has(n.id) ? ' hit' : ''));
-      g.dataset.id = n.id;
-
-      const isDark = st.selected === n.id || n.m === 'root';
-      g.appendChild(el('rect', {
-        x: 0, y: 0, width: n.w, height: NODE_H, rx: 9,
-        stroke: mod.color,
-        fill: st.selected === n.id ? mod.color : (n.m === 'root' ? mod.color : '#fff')
-      }, 'box'));
-
-      const tx = el('text', { x: PAD_X, y: NODE_H / 2, fill: isDark ? '#fff' : '#1f2937' }, 'lbl');
-      tx.textContent = n.t;
-      g.appendChild(tx);
-
-      /* 折叠 / 下钻开关：单个字符，无边框圆圈 */
-      const expandable = n.kids.length > 0;
-      const drill = !expandable && !!n.sub;
-      if (expandable || drill) {
-        const tog = el('g', { transform: `translate(${n.w - 10},${NODE_H / 2})` }, 'tog' + (drill ? ' sub' : ''));
-        tog.appendChild(el('rect', { x: -11, y: -13, width: 22, height: 26 }));  /* 扩大触摸区 */
-        const glyph = el('text');
-        glyph.textContent = drill ? '›' : (st.collapsed.has(n.id) ? '+' : '−');
-        tog.appendChild(glyph);
-        const ttl = el('title');
-        ttl.textContent = drill ? '打开子图：' + MAPS[n.sub].title : (st.collapsed.has(n.id) ? '展开' : '收起');
-        tog.appendChild(ttl);
-        tog.addEventListener('click', ev => {
-          ev.stopPropagation();
-          if (moved) return;
-          if (drill) { openMap(n.sub); return; }
-          const oldY = n.y;
-          if (st.collapsed.has(n.id)) st.collapsed.delete(n.id); else st.collapsed.add(n.id);
-          render();
-          st.vp.y += (oldY - n.y) * st.vp.k;   /* 被点的节点留在原位 */
-          applyVp();
-        });
-        g.appendChild(tog);
-      }
-
-      g.addEventListener('click', ev => {
-        ev.stopPropagation();
-        if (moved) return;
-        select(n.id);
+      const p = pos[n.id];
+      if (st.collapsed.has(n.id)) return;
+      n.kids.forEach(k => {
+        const pk = pos[k.id];
+        if (!pk) return;
+        const x1 = p.x + n.w, y1 = p.y, x2 = pk.x, y2 = pk.y, mx = (x1 + x2) / 2;
+        gEdge.appendChild(el('path', { d: `M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2}` }, 'edge'));
       });
-      gNode.appendChild(g);
+    });
+
+    const railRight = drawLinks(gLink, laneify(mainMap, currentLayout), 0, 0);
+    if (railRight > currentLayout.width) currentLayout.width = railRight;
+
+    /* 右侧内嵌二维子图 */
+    let subRight = 0;
+    vis.forEach(n => {
+      const box = subLayouts[n.id];
+      if (!box) return;
+      const p = pos[n.id];
+      const bx = p.x + n.w + SUB_GAP_X;
+      const by = p.y - box.boxH / 2;
+      subRight = Math.max(subRight, bx + box.boxW);
+
+      const g = el('g');
+      g.appendChild(el('rect', {
+        x: bx, y: by, width: box.boxW, height: box.boxH, rx: 14,
+        fill: '#f8fafc', stroke: '#cbd5e1', 'stroke-dasharray': '6 5'
+      }));
+      g.appendChild(el('path', {
+        d: `M${p.x + n.w},${p.y} L${bx},${p.y}`,
+        stroke: '#cbd5e1', 'stroke-width': 1.4
+      }));
+
+      const title = el('text', {
+        x: bx + SUB_PAD, y: by + 20, fill: '#475569',
+        'font-size': 12, 'font-weight': 700
+      });
+      title.textContent = '子图 · ' + box.map.title;
+      g.appendChild(title);
+
+      const ox = bx + SUB_PAD, oy = by + SUB_TITLE_H + SUB_PAD;
+      box.layout.vis.forEach(sn => {
+        const sp = box.layout.pos[sn.id];
+        if (st.collapsed.has(sn.id)) return;
+        sn.kids.forEach(k => {
+          const kp = box.layout.pos[k.id];
+          if (!kp) return;
+          const x1 = ox + sp.x + sn.w, y1 = oy + sp.y;
+          const x2 = ox + kp.x, y2 = oy + kp.y, mx = (x1 + x2) / 2;
+          g.appendChild(el('path', { d: `M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2}` }, 'edge'));
+        });
+      });
+      const subRail = drawLinks(g, box.items, ox, oy);
+      if (subRail) subRight = Math.max(subRight, ox + subRail);
+      gSub.appendChild(g);
+
+      box.layout.vis.forEach(sn => {
+        const sp = box.layout.pos[sn.id];
+        gNode.appendChild(makeNode(sn, ox + sp.x, oy + sp.y, box.map.id));
+      });
+    });
+    if (subRight > currentLayout.width) currentLayout.width = subRight;
+
+    vis.forEach(n => {
+      const p = pos[n.id];
+      gNode.appendChild(makeNode(n, p.x, p.y, 'main'));
     });
 
     updateStat();
     if (fitPending) { fit(); fitPending = false; }
   }
 
+  function makeNode(n, x, y, mapId) {
+    const mod = MOD[n.m] || MOD.d;
+    const isSel = st.selected.map === mapId && st.selected.id === n.id;
+    const g = el('g', { transform: `translate(${x},${y - NODE_H / 2})` },
+      'node' + (isSel ? ' sel' : '') + (n.m === 'ext' ? ' ext' : '') + (st.hits.has(n.id) ? ' hit' : ''));
+    g.dataset.id = n.id;
+
+    const isDark = isSel || n.m === 'root';
+    g.appendChild(el('rect', {
+      x: 0, y: 0, width: n.w, height: NODE_H, rx: 9,
+      stroke: mod.color,
+      fill: isSel ? mod.color : (n.m === 'root' ? mod.color : '#fff')
+    }, 'box'));
+
+    const tx = el('text', { x: PAD_X, y: NODE_H / 2, fill: isDark ? '#fff' : '#1f2937' }, 'lbl');
+    tx.textContent = n.t;
+    g.appendChild(tx);
+
+    const expandable = n.kids.length > 0;
+    const drill = !!n.sub;
+    if (expandable || drill) {
+      const isOpen = drill ? st.openSubs.has(n.id) : !st.collapsed.has(n.id);
+      const tog = el('g', { transform: `translate(${n.w - 10},${NODE_H / 2})` },
+        'tog' + (drill && !isOpen ? ' sub' : ''));
+      tog.appendChild(el('rect', { x: -11, y: -13, width: 22, height: 26 }));
+      const glyph = el('text');
+      glyph.textContent = isOpen ? '−' : (drill ? '›' : '+');
+      tog.appendChild(glyph);
+      const ttl = el('title');
+      ttl.textContent = drill
+        ? (isOpen ? '收起子图' : '在右侧展开二维子图')
+        : (isOpen ? '收起' : '展开');
+      tog.appendChild(ttl);
+
+      tog.addEventListener('click', ev => {
+        ev.stopPropagation();
+        if (moved) return;
+        if (drill) {
+          if (st.openSubs.has(n.id)) st.openSubs.delete(n.id); else st.openSubs.add(n.id);
+          render();
+          return;
+        }
+        const oldY = y;
+        if (st.collapsed.has(n.id)) st.collapsed.delete(n.id); else st.collapsed.add(n.id);
+        render();
+        const np = currentLayout.pos[n.id];
+        if (np) { st.vp.y += (oldY - np.y) * st.vp.k; applyVp(); }
+      });
+      g.appendChild(tog);
+    }
+
+    g.addEventListener('click', ev => {
+      ev.stopPropagation();
+      if (moved) return;
+      select(mapId, n.id);
+    });
+    return g;
+  }
+
   function updateStat() {
-    const m = cur();
-    const shown = currentLayout ? currentLayout.vis.length : m.nodes.length;
+    const shown = currentLayout ? currentLayout.vis.length : mainMap.nodes.length;
+    const subs = st.openSubs.size;
     document.getElementById('stat').textContent =
-      `${m.nodes.length} 节点 / ${m.links.length} 关系 · 可见 ${shown}`;
+      `${mainMap.nodes.length} 节点 / ${mainMap.links.length} 关系 · 可见 ${shown}` +
+      (subs ? ` · 子图 ${subs}` : '');
   }
 
   /* ---------- 详情卡 ---------- */
-  function select(id) {
-    st.selected = id;
-    const m = cur();
-    const n = m.byId[id];
+  function select(mapId, id) {
+    st.selected = { map: mapId, id };
+    const m = MAPS[mapId];
+    const n = m && m.byId[id];
     if (!n) return;
 
     const path = [];
     let c = n;
     while (c) { path.unshift(c.t); c = c.p ? m.byId[c.p] : null; }
+    let prefix = '';
+    if (mapId !== 'main') {
+      const host = mainMap.nodes.find(x => x.sub === mapId);
+      prefix = (host ? host.t : MAPS[mapId].title) + ' › ';
+    }
 
     document.getElementById('pTitle').textContent = n.t;
     document.getElementById('crumb').textContent =
-      (st.map === 'main' ? '' : MAPS[st.map].title + ' · ') +
-      (path.length > 1 ? path.slice(0, -1).join(' › ') : '顶层');
+      prefix + (path.length > 1 ? path.slice(0, -1).join(' › ') : '顶层');
 
     const mod = MOD[n.m] || MOD.d;
     document.getElementById('chips').innerHTML =
@@ -252,7 +412,9 @@
 
     let html = '';
     if (n.sub) {
-      html += `<div class="sec"><button class="goto" data-sub="${n.sub}">打开子图：${MAPS[n.sub].title} →</button></div>`;
+      const open = st.openSubs.has(n.id);
+      html += `<div class="sec"><button class="goto" data-toggle-sub="${n.id}">` +
+        (open ? '收起右侧子图' : '在右侧展开子图：' + MAPS[n.sub].title) + '</button></div>';
     }
     if (n.pr) html += `<div class="sec"><h4>一句话原理</h4><p>${n.pr}</p></div>`;
     if (n.pts && n.pts.length)
@@ -263,54 +425,14 @@
 
     const body = document.getElementById('pBody');
     body.innerHTML = html;
-    const btn = body.querySelector('[data-sub]');
-    if (btn) btn.addEventListener('click', () => openMap(btn.dataset.sub));
+    const btn = body.querySelector('[data-toggle-sub]');
+    if (btn) btn.addEventListener('click', () => {
+      const pid = btn.dataset.toggleSub;
+      if (st.openSubs.has(pid)) st.openSubs.delete(pid); else st.openSubs.add(pid);
+      render();
+    });
 
     render();
-  }
-
-  /* ---------- 子图导航（带视图记忆） ---------- */
-  const viewCache = {};
-  function openMap(id) {
-    if (!MAPS[id]) return;
-    viewCache[st.map] = {
-      collapsed: new Set(st.collapsed),
-      selected: st.selected,
-      vp: { x: st.vp.x, y: st.vp.y, k: st.vp.k }
-    };
-
-    st.map = id;
-    st.hits.clear();
-    document.getElementById('q').value = '';
-    renderCrumbs();
-
-    const cache = viewCache[id];
-    if (cache) {
-      st.collapsed = new Set(cache.collapsed);
-      st.selected = cache.selected;
-      st.vp = { x: cache.vp.x, y: cache.vp.y, k: cache.vp.k };
-      select(st.selected);
-      applyVp();
-      return;
-    }
-
-    /* 子图默认全展开（它本身就是“细节图”），主图默认折叠到小节层 */
-    st.collapsed = id === 'main' ? MAPS[id].defaultCollapsed() : new Set();
-    st.selected = MAPS[id].root;
-    fitPending = true;
-    select(st.selected);
-  }
-
-  function renderCrumbs() {
-    const box = document.getElementById('crumbs');
-    if (st.map === 'main') {
-      box.innerHTML = '<span class="cur">主图</span>';
-    } else {
-      const m = MAPS[st.map];
-      box.innerHTML = '<button class="ghost" id="btnBack">← 主图</button>' +
-        '<span class="sep">›</span><span class="cur">' + m.title + '</span>';
-      document.getElementById('btnBack').addEventListener('click', () => openMap(m.parent || 'main'));
-    }
   }
 
   /* ---------- 视图变换 ---------- */
@@ -327,17 +449,16 @@
       (r.height - padTop - pad) / currentLayout.height,
       1.15
     );
-    st.vp.k = Math.max(0.16, k);
+    st.vp.k = Math.max(0.14, k);
     st.vp.x = Math.max(pad, (r.width - currentLayout.width * st.vp.k) / 2);
     st.vp.y = Math.max(padTop, (r.height - currentLayout.height * st.vp.k) / 2 + 14);
     applyVp();
   }
-  function centerOn(node) {
-    if (!node) return;
+  function centerAt(x, y) {
     const r = svg.getBoundingClientRect();
     st.vp.k = Math.max(st.vp.k, 0.72);
-    st.vp.x = r.width * 0.42 - node.x * st.vp.k;
-    st.vp.y = r.height * 0.5 - node.y * st.vp.k;
+    st.vp.x = r.width * 0.42 - x * st.vp.k;
+    st.vp.y = r.height * 0.5 - y * st.vp.k;
     applyVp();
   }
   function zoomAt(mx, my, k2) {
@@ -348,7 +469,7 @@
     applyVp();
   }
 
-  /* ---------- 鼠标 / 触摸手势 ---------- */
+  /* ---------- 手势 ---------- */
   svg.addEventListener('wheel', e => {
     e.preventDefault();
     const r = svg.getBoundingClientRect();
@@ -413,29 +534,52 @@
   /* ---------- 搜索 ---------- */
   document.getElementById('q').addEventListener('input', e => {
     const q = e.target.value.trim();
-    const m = cur();
     st.hits = new Set();
     if (!q) { render(); return; }
-    m.nodes.forEach(n => {
+
+    let target = null, targetMap = null;
+    mainMap.nodes.forEach(n => {
       if (n.t.indexOf(q) >= 0 || (n.pr && n.pr.indexOf(q) >= 0)) {
         st.hits.add(n.id);
         let c = n;
-        while (c && c.p) { st.collapsed.delete(c.p); c = m.byId[c.p]; }
+        while (c && c.p) { st.collapsed.delete(c.p); c = mainMap.byId[c.p]; }
+        if (!target) { target = n; targetMap = 'main'; }
       }
     });
+    mainMap.nodes.forEach(host => {
+      if (!host.sub || !MAPS[host.sub]) return;
+      MAPS[host.sub].nodes.forEach(n => {
+        if (n.t.indexOf(q) >= 0 || (n.pr && n.pr.indexOf(q) >= 0)) {
+          st.hits.add(n.id);
+          st.openSubs.add(host.id);
+          if (!target) { target = n; targetMap = host.sub; }
+        }
+      });
+    });
+
     render();
-    const first = m.nodes.find(n => st.hits.has(n.id));
-    if (first) centerOn(first);
+    if (target) {
+      let x = 0, y = 0;
+      if (targetMap === 'main') {
+        const p = currentLayout.pos[target.id];
+        if (p) { x = p.x; y = p.y; }
+      } else {
+        const host = mainMap.nodes.find(h => h.sub === targetMap);
+        const hp = host && currentLayout.pos[host.id];
+        const box = host && subLayouts[host.id];
+        if (hp && box && box.layout.pos[target.id]) {
+          x = hp.x + host.w + SUB_GAP_X + SUB_PAD + box.layout.pos[target.id].x;
+          y = hp.y - box.boxH / 2 + SUB_TITLE_H + SUB_PAD + box.layout.pos[target.id].y;
+        }
+      }
+      centerAt(x, y);
+      select(targetMap, target.id);
+    }
   });
 
   /* ---------- 按钮 ---------- */
   document.getElementById('btnFit').onclick = () => fit();
-  document.getElementById('btnL2').onclick = () => {
-    const m = cur();
-    st.collapsed = new Set();
-    m.nodes.forEach(n => { if (n.depth >= 2 && n.kids.length) st.collapsed.add(n.id); });
-    render(); fit();
-  };
+  document.getElementById('btnL2').onclick = () => { st.collapsed = mainMap.defaultCollapsed(); render(); fit(); };
   document.getElementById('btnAll').onclick = () => { st.collapsed.clear(); render(); fit(); };
   document.getElementById('btnZoomIn').onclick = () => {
     const r = svg.getBoundingClientRect();
@@ -479,9 +623,7 @@
   })();
 
   /* ---------- 启动 ---------- */
-  st.collapsed = MAPS.main.defaultCollapsed();
-  st.selected = 'root';
-  renderCrumbs();
+  st.collapsed = mainMap.defaultCollapsed();
   render();
   applyVp();
   requestAnimationFrame(() => fit());
@@ -495,5 +637,5 @@
     rzTimer = setTimeout(() => { fit(); applyVp(); }, 80);
   }).observe(stageEl);
 
-  select('root');
+  select('main', 'root');
 })();
