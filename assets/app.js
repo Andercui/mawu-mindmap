@@ -755,6 +755,24 @@
     zoomAt(r.width / 2, r.height / 2, st.vp.k / 1.25);
   };
 
+  /* ---------- 版本号：页面版 vs 脚本版，两者不一致说明脚本被缓存 ---------- */
+  const BUILD = 'v2026.11.06-1635';
+  const vp = document.getElementById('verPage');
+  const vj = document.getElementById('verJs');
+  if (vp && vj) {
+    const pageVer = vp.textContent.trim();
+    if (pageVer === BUILD) {
+      vj.textContent = '';
+    } else {
+      /* 页面与脚本版本不一致 → 说明有文件被缓存，提示强刷 */
+      vj.textContent = BUILD;
+      vj.style.color = '#c2410c';
+      document.getElementById('legend').title =
+        '页面 ' + pageVer + ' / 脚本 ' + BUILD + '（不一致，请强制刷新）';
+    }
+  }
+  window.__MAP_BUILD__ = BUILD;
+
   /* ---------- 图例 ---------- */
   document.getElementById('lgToggle').addEventListener('click', () => {
     document.getElementById('legend').classList.toggle('collapsed');

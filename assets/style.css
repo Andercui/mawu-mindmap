@@ -56,11 +56,17 @@ button.pri:hover{background:#0f172a}
   padding:9px 11px; font-size:12px; box-shadow:0 4px 16px rgba(15,23,42,.06);
 }
 #legend .lg-t{font-weight:700; margin-bottom:6px; color:#334155; font-size:11.5px; cursor:pointer; user-select:none}
-#legend .lg-t .caret{color:#94a3b8; margin-left:2px}
+#legend .lg-t .caret{color:#94a3b8; margin-left:2px; display:inline-block}
 #legend.collapsed{padding:7px 10px}
 #legend.collapsed .lg-t{margin-bottom:0}
+#legend.collapsed .caret{transform:rotate(-90deg)}
+.lg-ver{
+  margin-top:7px; padding-top:6px; border-top:1px dashed #e2e8f0;
+  font-size:10px; color:#b0b8c4; letter-spacing:.2px; white-space:nowrap;
+}
+.lg-ver span:not(:empty) + span:not(:empty)::before{content:" · "}
+#legend.collapsed .lg-ver{margin-top:5px}
 #legend.collapsed #lgRows{display:none}
-#legend.collapsed .caret{transform:rotate(-90deg); display:inline-block}
 .lg-row{display:flex; align-items:center; gap:7px; margin:3px 0; cursor:pointer; user-select:none}
 .lg-row input{margin:0; accent-color:#475569}
 .lg-sw{width:24px; height:0; border-top-width:2px; border-top-style:solid}
