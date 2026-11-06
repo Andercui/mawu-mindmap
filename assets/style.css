@@ -104,9 +104,9 @@ kbd{background:#f1f5f9; border:1px solid #e2e8f0; border-bottom-width:2px; borde
 .clink{fill:none; stroke-width:1.8; opacity:.55; transition:opacity .15s}
 .clink:hover{opacity:1; stroke-width:2.6}
 .clink.off{display:none}
-.clabel{font-size:10.5px; fill:#94a3b8; pointer-events:none;
-  paint-order:stroke; stroke:#f7f8fa; stroke-width:3.2px; stroke-linejoin:round}
+.clabel{font-size:10.5px; fill:#94a3b8; pointer-events:none}
 .clabel.off{display:none}
+.guide{fill:none; stroke:none}
 .node{cursor:pointer}
 .node rect.box{fill:#fff; stroke-width:1.6; rx:9}
 .node text.lbl{font-size:13px; fill:#1f2937; dominant-baseline:middle; pointer-events:none; user-select:none}

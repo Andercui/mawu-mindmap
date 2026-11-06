@@ -262,8 +262,22 @@
     });
   }
 
-  /* ---------- 主图跨分支关系：实线，统一从右侧走廊绕行 ---------- */
-  function drawBusLinks(g, map, layout) {
+  /* ---------- 文字沿路径排布（textPath） ---------- */
+  let labelSeq = 0;
+  function pathLabel(g, d, text, color, visible, offset) {
+    const id = 'lp' + (labelSeq++);
+    const guide = el('path', { d, id, fill: 'none', stroke: 'none' }, 'guide');
+    g.appendChild(guide);
+    const t = el('text', { fill: color, dy: -5 }, 'clabel' + (visible ? '' : ' off'));
+    const tp = el('textPath', { href: '#' + id, startOffset: offset || '50%', 'text-anchor': 'middle' });
+    tp.setAttributeNS('http://www.w3.org/1999/xlink', 'xlink:href', '#' + id);
+    tp.textContent = text;
+    t.appendChild(tp);
+    g.appendChild(t);
+  }
+
+  /* ---------- 主图跨分支关系：曲线，从右侧绕行 ---------- */
+  function drawCurveLinks(g, map, layout) {
     const items = [];
     map.links.forEach(L => {
       const s = map.byId[L.a], t = map.byId[L.b];
@@ -272,45 +286,31 @@
       if (!ps || !pt) return;
       items.push({ L, s, t, ps, pt });
     });
-    /* 按纵向位置排车道，避免走廊内的线互相交叉 */
     items.sort((a, b) => (Math.min(a.ps.y, a.pt.y) - Math.min(b.ps.y, b.pt.y)) || (a.ps.y - b.ps.y));
 
-    const baseX = layout.width + 22;
+    const baseX = layout.width + 34;
     let maxX = layout.width;
     items.forEach((o, i) => {
-      const cx = baseX + i * 13;
+      const cx = baseX + i * 14;
       maxX = Math.max(maxX, cx);
-      const y1 = o.ps.y, y2 = o.pt.y;
-      const x1 = o.ps.x + o.s.w, x2 = o.pt.x + o.t.w;
+      const x1 = o.ps.x + o.s.w, y1 = o.ps.y;
+      const x2 = o.pt.x + o.t.w, y2 = o.pt.y;
       const kind = KIND[o.L.k] || KIND.prog;
-      const dir = y2 >= y1 ? 1 : -1;
-      /* 走“行间空隙”：先竖着挪 21px 到两行之间的空带，再横穿，避免压到节点 */
-      const y1s = y1 + dir * 21;
-      const y2s = y2 + dir * 21;
-      const xIn = x2 + 16;
-      const d = `M${x1},${y1} L${x1},${y1s} L${cx},${y1s} L${cx},${y2s} L${xIn},${y2s} L${xIn},${y2} L${x2},${y2}`;
 
+      const d = `M${x1},${y1} C${cx},${y1} ${cx},${y2} ${x2},${y2}`;
       const p = el('path', {
         d, stroke: kind.color, fill: 'none',
-        'stroke-linejoin': 'round',
         'marker-end': 'url(#arw-' + o.L.k + ')'
       }, 'clink' + (linkVisible[o.L.k] ? '' : ' off'));
       const ttl = el('title'); ttl.textContent = o.L.l; p.appendChild(ttl);
       g.appendChild(p);
 
-      /* 文字沿走廊竖排（沿线书写），不压线 */
-      if (Math.abs(y2 - y1) > 52) {
-        const mx = cx + 9, my = (y1s + y2s) / 2;
-        const tx = el('text', {
-          x: mx, y: my, fill: kind.color,
-          transform: `rotate(-90 ${mx} ${my})`, 'text-anchor': 'middle'
-        }, 'clabel' + (linkVisible[o.L.k] ? '' : ' off'));
-        tx.textContent = o.L.l;
-        g.appendChild(tx);
-        maxX = Math.max(maxX, mx + 12);
-      }
+      /* 文字贴着这条曲线走 */
+      const lbl = `M${x1},${y1} C${cx},${y1} ${cx},${y2} ${x2},${y2}`;
+      pathLabel(g, lbl, o.L.l, kind.color, linkVisible[o.L.k]);
+      maxX = Math.max(maxX, cx);
     });
-    return maxX + 16;
+    return maxX + 22;
   }
   function boxCenter(node, p, ox, oy) {
     return { cx: ox + p.x + node.w / 2, cy: oy + p.y, w: node.w + 2, h: NODE_H + 2 };
@@ -337,7 +337,6 @@
     const counts = {};
     links.forEach(o => { counts[o.key] = Math.max(counts[o.key] || 0, o.seq + 1); });
 
-    const pending = [];
     let maxRight = 0;
     links.forEach(o => {
       const a = boxCenter(o.s, o.ps, ox, oy);
@@ -345,10 +344,10 @@
       const p1 = borderPoint(a, b);
       const p2 = borderPoint(b, a);
 
-      /* 双向关系：两条平行线；标签沿线书写，放在各自线的外侧 */
+      /* 双向关系：两条平行线，标签分别贴各自线的外侧 */
       const pairN = counts[o.key];
       const off = pairN > 1 ? (o.seq === 0 ? 6 : -6) : 0;
-      const t = pairN > 1 ? (o.seq === 0 ? 0.38 : 0.62) : 0.5;
+      const startOffset = pairN > 1 ? (o.seq === 0 ? '38%' : '62%') : '50%';
       const dx = b.cx - a.cx, dy = b.cy - a.cy, len = Math.hypot(dx, dy) || 1;
       const nx = -dy / len, ny = dx / len;
       const q1 = { x: p1.x + nx * off, y: p1.y + ny * off };
@@ -363,48 +362,24 @@
       const ttl = el('title'); ttl.textContent = o.L.l; path.appendChild(ttl);
       g.appendChild(path);
 
-      const mx = q1.x + (q2.x - q1.x) * t;
-      const my = q1.y + (q2.y - q1.y) * t;
-      const lx = mx + nx * (off < 0 ? -9 : 9);
-      const ly = my + ny * (off < 0 ? -9 : 9);
-      let rot = Math.atan2(q2.y - q1.y, q2.x - q1.x) * 180 / Math.PI;
-      if (rot > 90) rot -= 180;
-      if (rot < -90) rot += 180;
-
-      pending.push({
-        text: o.L.l, color: kind.color, kind: o.L.k,
-        x: lx, y: ly, rot,
-        w: mctx.measureText(o.L.l).width
-      });
-      maxRight = Math.max(maxRight, q2.x, q1.x);
-    });
-
-    /* 标签沿各自线段书写（旋转对齐），再做一次防重叠 */
-    const placed = [];
-    pending.sort((a, b) => a.y - b.y);
-    pending.forEach(L => {
-      const rad = L.rot * Math.PI / 180;
-      const bw = Math.abs(L.w * Math.cos(rad)) + Math.abs(11 * Math.sin(rad));
-      const bh = Math.abs(L.w * Math.sin(rad)) + Math.abs(11 * Math.cos(rad));
-      let cx = L.x, cy = L.y;
-      for (let guard = 0; guard < 8; guard++) {
-        const hit = placed.find(P =>
-          cx - bw / 2 < P.x + P.w / 2 + 5 && P.x - P.w / 2 < cx + bw / 2 + 5 &&
-          cy - bh / 2 < P.y + P.h / 2 + 4 && P.y - P.h / 2 < cy + bh / 2 + 4);
-        if (!hit) break;
-        const nx2 = -Math.sin(rad), ny2 = Math.cos(rad);
-        cx += nx2 * 12; cy += ny2 * 12;
+      /* 标签：沿这条线（法向偏移 9px 的平行线）排字，方向统一为左→右 */
+      const lo = off < 0 ? -9 : 9;
+      let gx1 = q1.x + nx * lo, gy1 = q1.y + ny * lo;
+      let gx2 = q2.x + nx * lo, gy2 = q2.y + ny * lo;
+      if (gx2 < gx1) {
+        const tx0 = gx1, ty0 = gy1;
+        gx1 = gx2; gy1 = gy2; gx2 = tx0; gy2 = ty0;
       }
-      placed.push({ x: cx, y: cy, w: bw, h: bh });
-      maxRight = Math.max(maxRight, cx + bw / 2 + 8);
-
-      const tx = el('text', {
-        x: cx, y: cy, fill: L.color, 'text-anchor': 'middle',
-        'dominant-baseline': 'middle',
-        transform: `rotate(${L.rot.toFixed(1)} ${cx.toFixed(1)} ${cy.toFixed(1)})`
-      }, 'clabel' + (linkVisible[L.kind] ? '' : ' off'));
-      tx.textContent = L.text;
-      g.appendChild(tx);
+      /* 引导线不够长时向两端延长，避免 textPath 把文字截断 */
+      const tw = mctx.measureText(o.L.l).width + 10;
+      const glen = Math.hypot(gx2 - gx1, gy2 - gy1) || 1;
+      if (glen < tw) {
+        const ux = (gx2 - gx1) / glen, uy = (gy2 - gy1) / glen;
+        const ext = (tw - glen) / 2;
+        gx1 -= ux * ext; gy1 -= uy * ext; gx2 += ux * ext; gy2 += uy * ext;
+      }
+      pathLabel(g, `M${gx1},${gy1} L${gx2},${gy2}`, o.L.l, kind.color, linkVisible[o.L.k], startOffset);
+      maxRight = Math.max(maxRight, q1.x, q2.x, gx2 + 30);
     });
     return maxRight - ox;
   }
@@ -414,7 +389,6 @@
     buildSubLayouts();
     currentLayout = layoutMap(mainMap, st.collapsed, V_GAP, H_GAP, null);
     const { vis, pos } = currentLayout;
-
     vpG.textContent = '';
     const gEdge = el('g'), gLink = el('g'), gSub = el('g'), gNode = el('g');
     vpG.append(gEdge, gLink, gSub, gNode);
@@ -430,7 +404,7 @@
       });
     });
 
-    const railRight = drawBusLinks(gLink, mainMap, currentLayout);
+    const railRight = drawCurveLinks(gLink, mainMap, currentLayout);
     if (railRight > currentLayout.width) currentLayout.width = railRight;
 
     /* 主图右侧空白区：该节元素的二维关系视图 */
