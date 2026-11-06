@@ -264,17 +264,67 @@
 
   /* ---------- 文字沿路径排布（textPath） ---------- */
   let labelSeq = 0;
-  function pathLabel(g, d, text, color, visible) {
+  function pathLabel(g, d, text, color, visible, offset) {
     const id = 'lp' + (labelSeq++);
     const guide = el('path', { d, id, fill: 'none', stroke: 'none' }, 'guide');
     g.appendChild(guide);
-    const t = el('text', { fill: color, dy: -5 }, 'clabel' + (visible ? '' : ' off'));
+    const t = el('text', { fill: color, dy: -5, 'data-off': String(offset || 14) },
+      'clabel' + (visible ? '' : ' off'));
     /* 字放在线的起点附近，沿路径方向排开 */
-    const tp = el('textPath', { href: '#' + id, startOffset: '14px', 'text-anchor': 'start' });
+    const tp = el('textPath', { href: '#' + id, startOffset: (offset || 14) + 'px', 'text-anchor': 'start' });
     tp.setAttributeNS('http://www.w3.org/1999/xlink', 'xlink:href', '#' + id);
     tp.textContent = text;
     t.appendChild(tp);
     g.appendChild(t);
+  }
+
+  /* 沿路径逐个试位置：既不压在别的字上，也不压在节点框上。
+     一条线引出多个关系时，后面的字自动往后让；实在排不开就选冲突最少的，
+     再不行就把字往线的侧面挪一点（dy） */
+  function resolveLabels(container) {
+    const boxes = [...document.querySelectorAll('g.node .box')].map(e => e.getBoundingClientRect());
+    const hit = (a, b) => a.left < b.right - 1 && b.left < a.right - 1 &&
+                          a.top < b.bottom - 1 && b.top < a.bottom - 1;
+
+    const labels = [...container.querySelectorAll('text.clabel:not(.off)')].map(t => {
+      const tp = t.querySelector('textPath');
+      if (!tp) return null;
+      const href = (tp.getAttribute('href') || '').replace('#', '');
+      const guide = document.getElementById(href);
+      let len = 0;
+      try { len = guide ? guide.getTotalLength() : 0; } catch (e) { len = 0; }
+      return { el: t, tp, len, box: null, base: parseFloat(t.getAttribute('data-off') || 14) };
+    }).filter(Boolean);
+
+    labels.forEach(o => {
+      const tw = o.el.getComputedTextLength ? o.el.getComputedTextLength() : 40;
+      const costOf = () => {
+        const b = o.el.getBoundingClientRect();
+        /* 压在别的标签上比压在节点上更难看，所以权重差 10 倍 */
+        return labels.reduce((s, p) => s + (p.box && hit(b, p.box) ? 10 : 0), 0) +
+               boxes.reduce((s, n) => s + (hit(b, n) ? 1 : 0), 0);
+      };
+      let best = null, bestCost = Infinity;
+      const scan = (steps, dys) => {
+        for (const dy of dys) {
+          o.el.setAttribute('dy', dy);
+          for (const step of steps) {
+            const off = o.base + step;
+            if (o.len && off + tw > o.len - 2) break;
+            o.tp.setAttribute('startOffset', off + 'px');
+            const c = costOf();
+            if (c < bestCost) { bestCost = c; best = { off, dy }; }
+            if (c === 0) return;
+          }
+        }
+      };
+      scan([0, 16, 32, 48, 66, 86, 110, 140, 172], [-5]);
+      if (bestCost > 0) scan([0, 16, 32, 48], [-16, 7, -25]);
+
+      o.tp.setAttribute('startOffset', (best ? best.off : o.base) + 'px');
+      o.el.setAttribute('dy', best ? best.dy : -5);
+      o.box = o.el.getBoundingClientRect();
+    });
   }
 
   /* ---------- 主图跨分支关系：曲线，从右侧绕行 ---------- */
@@ -291,10 +341,17 @@
 
     const baseX = layout.width + 34;
     let maxX = layout.width;
+    /* 同一节点引出的多条线：在节点右边缘上错开出发点，线束呈扇形，字才不会叠在起点 */
+    const srcTotal = {};
+    items.forEach(o => { srcTotal[o.s.id] = (srcTotal[o.s.id] || 0) + 1; });
+    const srcSeen = {};
     items.forEach((o, i) => {
       const cx = baseX + i * 14;
       maxX = Math.max(maxX, cx);
-      const x1 = o.ps.x + o.s.w, y1 = o.ps.y;
+      const n = srcTotal[o.s.id];
+      const k = (srcSeen[o.s.id] = (srcSeen[o.s.id] || 0) + 1) - 1;
+      const fan = n > 1 ? (k - (n - 1) / 2) * Math.min(18, 36 / n) : 0;
+      const x1 = o.ps.x + o.s.w, y1 = o.ps.y + fan;
       const x2 = o.pt.x + o.t.w, y2 = o.pt.y;
       const kind = KIND[o.L.k] || KIND.prog;
 
@@ -306,9 +363,7 @@
       const ttl = el('title'); ttl.textContent = o.L.l; p.appendChild(ttl);
       g.appendChild(p);
 
-      /* 文字贴着这条曲线走 */
-      const lbl = `M${x1},${y1} C${cx},${y1} ${cx},${y2} ${x2},${y2}`;
-      pathLabel(g, lbl, o.L.l, kind.color, linkVisible[o.L.k]);
+      pathLabel(g, d, o.L.l, kind.color, linkVisible[o.L.k], 14);
       maxX = Math.max(maxX, cx);
     });
     return maxX + 22;
@@ -337,6 +392,13 @@
     });
     const counts = {};
     links.forEach(o => { counts[o.key] = Math.max(counts[o.key] || 0, o.seq + 1); });
+
+    /* 同一个节点引出多条线时，字沿各自的线错开 */
+    const srcSeen = {};
+    const srcOff = id => {
+      const n = srcSeen[id] = (srcSeen[id] || 0) + 1;
+      return (n - 1) * 16;
+    };
 
     let maxRight = 0;
     links.forEach(o => {
@@ -381,7 +443,7 @@
         const ext = (need - glen) / 2;
         gx1 -= ux * ext; gy1 -= uy * ext; gx2 += ux * ext; gy2 += uy * ext;
       }
-      pathLabel(g, `M${gx1},${gy1} L${gx2},${gy2}`, o.L.l, kind.color, linkVisible[o.L.k]);
+      pathLabel(g, `M${gx1},${gy1} L${gx2},${gy2}`, o.L.l, kind.color, linkVisible[o.L.k], Math.abs(lo) + srcOff(o.s.id));
       maxRight = Math.max(maxRight, q1.x, q2.x, gx2 + 30);
     });
     return maxRight - ox;
@@ -474,6 +536,10 @@
       const p = pos[n.id];
       gNode.appendChild(makeNode(n, p.x, p.y, 'main'));
     });
+
+    /* 标签互相压住了就往后挪（隐藏的标签不参与） */
+    resolveLabels(gLink);
+    resolveLabels(gSub);
 
     updateStat();
     if (fitPending) { fit(); fitPending = false; }
@@ -759,7 +825,7 @@
   };
 
   /* ---------- 版本号：页面版 vs 脚本版，两者不一致说明脚本被缓存 ---------- */
-  const BUILD = 'v2026.11.06-1640';
+  const BUILD = 'v2026.11.06-1725';
   const vp = document.getElementById('verPage');
   const vj = document.getElementById('verJs');
   if (vp && vj) {
