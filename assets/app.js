@@ -16,6 +16,11 @@
     c1:  { name:'第一章 辩证唯物论',  color:'#2563eb' },
     c2:  { name:'第二章 唯物辩证法',  color:'#ea580c' },
     c3:  { name:'第三章 认识论',      color:'#059669' },
+    c4:  { name:'第四章 唯物史观',    color:'#7c3aed' },
+    c5:  { name:'第五章 资本主义的本质及规律', color:'#dc2626' },
+    c6:  { name:'第六章 资本主义的发展及趋势', color:'#db2777' },
+    c7:  { name:'第七章 社会主义的发展及规律', color:'#0d9488' },
+    c8:  { name:'第八章 共产主义',    color:'#b45309' },
     ext: { name:'往下衔接',          color:'#94a3b8' }
   };
 
@@ -639,7 +644,7 @@
       html += `<div class="sec"><button class="goto" data-toggle-node="${n.id}">` +
         (open ? '收起本节（同时收起右侧关系图）' : '展开本节 · 右侧显示关系图') + '</button></div>';
     }
-    if (n.pr) html += `<div class="sec"><h4>一句话原理</h4><p>${n.pr}</p></div>`;
+    if (n.pr) html += `<div class="sec"><h4>原理</h4><p>${n.pr}</p></div>`;
     if (n.pts && n.pts.length)
       html += `<div class="sec"><h4>要点</h4><ul>${n.pts.map(x => `<li>${x}</li>`).join('')}</ul></div>`;
     if (n.trap) html += `<div class="sec"><div class="trap"><b>易错 / 命题角度：</b>${n.trap}</div></div>`;
@@ -825,7 +830,7 @@
   };
 
   /* ---------- 版本号：页面版 vs 脚本版，两者不一致说明脚本被缓存 ---------- */
-  const BUILD = 'v2026.11.06-1725';
+  const BUILD = 'v2026.11.06-1745';
   const vp = document.getElementById('verPage');
   const vj = document.getElementById('verJs');
   if (vp && vj) {
