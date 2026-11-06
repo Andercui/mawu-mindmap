@@ -262,7 +262,56 @@
     });
   }
 
-  /* 二维关系图：节点中心 → 节点中心，直线 + 边框裁切；双向关系并行错开 */
+  /* ---------- 主图跨分支关系：实线，统一从右侧走廊绕行 ---------- */
+  function drawBusLinks(g, map, layout) {
+    const items = [];
+    map.links.forEach(L => {
+      const s = map.byId[L.a], t = map.byId[L.b];
+      if (!s || !t) return;
+      const ps = layout.pos[s.id], pt = layout.pos[t.id];
+      if (!ps || !pt) return;
+      items.push({ L, s, t, ps, pt });
+    });
+    /* 按纵向位置排车道，避免走廊内的线互相交叉 */
+    items.sort((a, b) => (Math.min(a.ps.y, a.pt.y) - Math.min(b.ps.y, b.pt.y)) || (a.ps.y - b.ps.y));
+
+    const baseX = layout.width + 22;
+    let maxX = layout.width;
+    items.forEach((o, i) => {
+      const cx = baseX + i * 13;
+      maxX = Math.max(maxX, cx);
+      const y1 = o.ps.y, y2 = o.pt.y;
+      const x1 = o.ps.x + o.s.w, x2 = o.pt.x + o.t.w;
+      const kind = KIND[o.L.k] || KIND.prog;
+      const dir = y2 >= y1 ? 1 : -1;
+      /* 走“行间空隙”：先竖着挪 21px 到两行之间的空带，再横穿，避免压到节点 */
+      const y1s = y1 + dir * 21;
+      const y2s = y2 + dir * 21;
+      const xIn = x2 + 16;
+      const d = `M${x1},${y1} L${x1},${y1s} L${cx},${y1s} L${cx},${y2s} L${xIn},${y2s} L${xIn},${y2} L${x2},${y2}`;
+
+      const p = el('path', {
+        d, stroke: kind.color, fill: 'none',
+        'stroke-linejoin': 'round',
+        'marker-end': 'url(#arw-' + o.L.k + ')'
+      }, 'clink' + (linkVisible[o.L.k] ? '' : ' off'));
+      const ttl = el('title'); ttl.textContent = o.L.l; p.appendChild(ttl);
+      g.appendChild(p);
+
+      /* 文字沿走廊竖排（沿线书写），不压线 */
+      if (Math.abs(y2 - y1) > 52) {
+        const mx = cx + 9, my = (y1s + y2s) / 2;
+        const tx = el('text', {
+          x: mx, y: my, fill: kind.color,
+          transform: `rotate(-90 ${mx} ${my})`, 'text-anchor': 'middle'
+        }, 'clabel' + (linkVisible[o.L.k] ? '' : ' off'));
+        tx.textContent = o.L.l;
+        g.appendChild(tx);
+        maxX = Math.max(maxX, mx + 12);
+      }
+    });
+    return maxX + 16;
+  }
   function boxCenter(node, p, ox, oy) {
     return { cx: ox + p.x + node.w / 2, cy: oy + p.y, w: node.w + 2, h: NODE_H + 2 };
   }
@@ -296,9 +345,9 @@
       const p1 = borderPoint(a, b);
       const p2 = borderPoint(b, a);
 
-      /* 双向关系：两条线分别向两侧偏移，形成平行箭头 */
+      /* 双向关系：两条平行线；标签沿线书写，放在各自线的外侧 */
       const pairN = counts[o.key];
-      const off = pairN > 1 ? (o.seq === 0 ? 7 : -7) : 0;
+      const off = pairN > 1 ? (o.seq === 0 ? 6 : -6) : 0;
       const t = pairN > 1 ? (o.seq === 0 ? 0.38 : 0.62) : 0.5;
       const dx = b.cx - a.cx, dy = b.cy - a.cy, len = Math.hypot(dx, dy) || 1;
       const nx = -dy / len, ny = dx / len;
@@ -309,36 +358,51 @@
       const path = el('path', {
         d: `M${q1.x},${q1.y} L${q2.x},${q2.y}`,
         stroke: kind.color,
-        'stroke-dasharray': kind.dash,
         'marker-end': 'url(#arw-' + o.L.k + ')'
       }, 'clink' + (linkVisible[o.L.k] ? '' : ' off'));
       const ttl = el('title'); ttl.textContent = o.L.l; path.appendChild(ttl);
       g.appendChild(path);
 
+      const mx = q1.x + (q2.x - q1.x) * t;
+      const my = q1.y + (q2.y - q1.y) * t;
+      const lx = mx + nx * (off < 0 ? -9 : 9);
+      const ly = my + ny * (off < 0 ? -9 : 9);
+      let rot = Math.atan2(q2.y - q1.y, q2.x - q1.x) * 180 / Math.PI;
+      if (rot > 90) rot -= 180;
+      if (rot < -90) rot += 180;
+
       pending.push({
         text: o.L.l, color: kind.color, kind: o.L.k,
-        x: q1.x + (q2.x - q1.x) * t + nx * (off >= 0 ? 9 : -9),
-        y: q1.y + (q2.y - q1.y) * t + ny * (off >= 0 ? 9 : -9) - 3,
+        x: lx, y: ly, rot,
         w: mctx.measureText(o.L.l).width
       });
       maxRight = Math.max(maxRight, q2.x, q1.x);
     });
 
-    /* 标签防重叠 */
-    pending.sort((a, b) => a.y - b.y);
+    /* 标签沿各自线段书写（旋转对齐），再做一次防重叠 */
     const placed = [];
+    pending.sort((a, b) => a.y - b.y);
     pending.forEach(L => {
-      let x = L.x - L.w / 2;
-      for (let guard = 0; guard < 12; guard++) {
+      const rad = L.rot * Math.PI / 180;
+      const bw = Math.abs(L.w * Math.cos(rad)) + Math.abs(11 * Math.sin(rad));
+      const bh = Math.abs(L.w * Math.sin(rad)) + Math.abs(11 * Math.cos(rad));
+      let cx = L.x, cy = L.y;
+      for (let guard = 0; guard < 8; guard++) {
         const hit = placed.find(P =>
-          x < P.x + P.w + 6 && P.x < x + L.w + 6 && L.y - 11 < P.y + 6 && P.y < L.y + 11);
+          cx - bw / 2 < P.x + P.w / 2 + 5 && P.x - P.w / 2 < cx + bw / 2 + 5 &&
+          cy - bh / 2 < P.y + P.h / 2 + 4 && P.y - P.h / 2 < cy + bh / 2 + 4);
         if (!hit) break;
-        x = hit.x + hit.w + 10;
+        const nx2 = -Math.sin(rad), ny2 = Math.cos(rad);
+        cx += nx2 * 12; cy += ny2 * 12;
       }
-      placed.push({ x, y: L.y, w: L.w });
-      maxRight = Math.max(maxRight, x + L.w + 10);
-      const tx = el('text', { x, y: L.y, 'text-anchor': 'start', fill: L.color },
-        'clabel' + (linkVisible[L.kind] ? '' : ' off'));
+      placed.push({ x: cx, y: cy, w: bw, h: bh });
+      maxRight = Math.max(maxRight, cx + bw / 2 + 8);
+
+      const tx = el('text', {
+        x: cx, y: cy, fill: L.color, 'text-anchor': 'middle',
+        'dominant-baseline': 'middle',
+        transform: `rotate(${L.rot.toFixed(1)} ${cx.toFixed(1)} ${cy.toFixed(1)})`
+      }, 'clabel' + (linkVisible[L.kind] ? '' : ' off'));
       tx.textContent = L.text;
       g.appendChild(tx);
     });
@@ -366,7 +430,7 @@
       });
     });
 
-    const railRight = drawLinks(gLink, laneify(mainMap, currentLayout), 0, 0);
+    const railRight = drawBusLinks(gLink, mainMap, currentLayout);
     if (railRight > currentLayout.width) currentLayout.width = railRight;
 
     /* 主图右侧空白区：该节元素的二维关系视图 */
@@ -476,7 +540,7 @@
         const oldY = y;
         if (st.collapsed.has(n.id)) st.collapsed.delete(n.id); else st.collapsed.add(n.id);
         render();
-        if (n.sub) { fit(); return; }        /* 关系图出现/消失，整体重排 */
+        /* 只保持被点节点在屏幕上的位置，不改变缩放 */
         const np = currentLayout.pos[n.id];
         if (np) { st.vp.y += (oldY - np.y) * st.vp.k; applyVp(); }
       });
@@ -544,9 +608,13 @@
     const btn = body.querySelector('[data-toggle-node]');
     if (btn) btn.addEventListener('click', () => {
       const pid = btn.dataset.toggleNode;
+      const oldY = currentLayout && currentLayout.pos[pid] ? currentLayout.pos[pid].y : null;
       if (st.collapsed.has(pid)) st.collapsed.delete(pid); else st.collapsed.add(pid);
       render();
-      fit();
+      if (oldY !== null && currentLayout.pos[pid]) {
+        st.vp.y += (oldY - currentLayout.pos[pid].y) * st.vp.k;
+        applyVp();
+      }
     });
 
     render();
@@ -662,7 +730,12 @@
   function endPointer(e) {
     if (!pointers.has(e.pointerId)) return;
     pointers.delete(e.pointerId);
-    if (pointers.size === 0) { gesture = null; stageEl.classList.remove('dragging'); }
+    if (pointers.size === 0) {
+      gesture = null;
+      stageEl.classList.remove('dragging');
+      /* click 事件在 pointerup 之后同步派发，这里延后复位，避免误吞点击 */
+      setTimeout(() => { moved = false; }, 0);
+    }
     else if (pointers.size === 1) {
       const p = [...pointers.values()][0];
       gesture = { type: 'pan', sx: p.x, sy: p.y, vx: st.vp.x, vy: st.vp.y };
@@ -719,7 +792,7 @@
       const row = document.createElement('label');
       row.className = 'lg-row';
       row.innerHTML = '<input type="checkbox" checked>' +
-        `<span class="lg-sw" style="border-top-color:${kd.color};border-top-style:${kd.dash ? 'dashed' : 'solid'}"></span>` +
+        `<span class="lg-sw" style="border-top-color:${kd.color};border-top-style:solid"></span>` +
         `<span class="lg-name">${kd.name}</span>`;
       row.querySelector('input').addEventListener('change', ev => {
         linkVisible[k] = ev.target.checked;
