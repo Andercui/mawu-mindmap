@@ -354,8 +354,10 @@
         ev.stopPropagation();
         if (moved) return;
         if (drill) {
-          if (st.openSubs.has(n.id)) st.openSubs.delete(n.id); else st.openSubs.add(n.id);
+          const willOpen = !st.openSubs.has(n.id);
+          if (willOpen) st.openSubs.add(n.id); else st.openSubs.delete(n.id);
           render();
+          if (willOpen) revealSub(n.id); else fit();
           return;
         }
         const oldY = y;
@@ -428,8 +430,10 @@
     const btn = body.querySelector('[data-toggle-sub]');
     if (btn) btn.addEventListener('click', () => {
       const pid = btn.dataset.toggleSub;
-      if (st.openSubs.has(pid)) st.openSubs.delete(pid); else st.openSubs.add(pid);
+      const willOpen = !st.openSubs.has(pid);
+      if (willOpen) st.openSubs.add(pid); else st.openSubs.delete(pid);
       render();
+      if (willOpen) revealSub(pid); else fit();
     });
 
     render();
@@ -461,6 +465,30 @@
     st.vp.y = r.height * 0.5 - y * st.vp.k;
     applyVp();
   }
+  function ensureVisible(x1, y1, x2, y2) {
+    const r = svg.getBoundingClientRect();
+    if (!r.width) return;
+    const padTop = 70, padR = 18, padB = 18, padL = 18;
+    const sx1 = st.vp.x + x1 * st.vp.k, sx2 = st.vp.x + x2 * st.vp.k;
+    const sy1 = st.vp.y + y1 * st.vp.k, sy2 = st.vp.y + y2 * st.vp.k;
+    let dx = 0, dy = 0;
+    if (sx2 > r.width - padR) dx = r.width - padR - sx2;
+    if (sx1 + dx < padL) dx = Math.max(0, r.width - padR - sx2);
+    if (sy2 > r.height - padB) dy = r.height - padB - sy2;
+    if (sy1 + dy < padTop) dy = Math.max(padTop - sy1, r.height - padB - sy2);
+    st.vp.x += dx;
+    st.vp.y += dy;
+    applyVp();
+  }
+
+  function revealSub(hostId) {
+    const box = subLayouts[hostId];
+    const p = currentLayout && currentLayout.pos[hostId];
+    if (!box || !p) { fit(); return; }
+    const bx = p.x + mainMap.byId[hostId].w + SUB_GAP_X;
+    ensureVisible(bx, p.y - box.boxH / 2, bx + box.boxW, p.y + box.boxH / 2);
+  }
+
   function zoomAt(mx, my, k2) {
     k2 = Math.min(3, Math.max(0.1, k2));
     st.vp.x = mx - (mx - st.vp.x) * (k2 / st.vp.k);
