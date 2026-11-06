@@ -264,12 +264,13 @@
 
   /* ---------- 文字沿路径排布（textPath） ---------- */
   let labelSeq = 0;
-  function pathLabel(g, d, text, color, visible, offset) {
+  function pathLabel(g, d, text, color, visible) {
     const id = 'lp' + (labelSeq++);
     const guide = el('path', { d, id, fill: 'none', stroke: 'none' }, 'guide');
     g.appendChild(guide);
     const t = el('text', { fill: color, dy: -5 }, 'clabel' + (visible ? '' : ' off'));
-    const tp = el('textPath', { href: '#' + id, startOffset: offset || '50%', 'text-anchor': 'middle' });
+    /* 字放在线的起点附近，沿路径方向排开 */
+    const tp = el('textPath', { href: '#' + id, startOffset: '14px', 'text-anchor': 'start' });
     tp.setAttributeNS('http://www.w3.org/1999/xlink', 'xlink:href', '#' + id);
     tp.textContent = text;
     t.appendChild(tp);
@@ -344,14 +345,15 @@
       const p1 = borderPoint(a, b);
       const p2 = borderPoint(b, a);
 
-      /* 双向关系：两条平行线，标签分别贴各自线的外侧 */
+      /* 双向关系：两条平行线（以“配对轴”为基准偏移，方向相反也一致），标签贴各自起点 */
       const pairN = counts[o.key];
-      const off = pairN > 1 ? (o.seq === 0 ? 6 : -6) : 0;
-      const startOffset = pairN > 1 ? (o.seq === 0 ? '38%' : '62%') : '50%';
-      const dx = b.cx - a.cx, dy = b.cy - a.cy, len = Math.hypot(dx, dy) || 1;
-      const nx = -dy / len, ny = dx / len;
-      const q1 = { x: p1.x + nx * off, y: p1.y + ny * off };
-      const q2 = { x: p2.x + nx * off, y: p2.y + ny * off };
+      const seqOff = pairN > 1 ? (o.seq === 0 ? 6 : -6) : 0;
+      const axisX = (o.s.id < o.t.id) ? (b.cx - a.cx) : (a.cx - b.cx);
+      const axisY = (o.s.id < o.t.id) ? (b.cy - a.cy) : (a.cy - b.cy);
+      const alen = Math.hypot(axisX, axisY) || 1;
+      const anx = -axisY / alen, any = axisX / alen;
+      const q1 = { x: p1.x + anx * seqOff, y: p1.y + any * seqOff };
+      const q2 = { x: p2.x + anx * seqOff, y: p2.y + any * seqOff };
 
       const kind = KIND[o.L.k] || KIND.prog;
       const path = el('path', {
@@ -362,23 +364,24 @@
       const ttl = el('title'); ttl.textContent = o.L.l; path.appendChild(ttl);
       g.appendChild(path);
 
-      /* 标签：沿这条线（法向偏移 9px 的平行线）排字，方向统一为左→右 */
-      const lo = off < 0 ? -9 : 9;
-      let gx1 = q1.x + nx * lo, gy1 = q1.y + ny * lo;
-      let gx2 = q2.x + nx * lo, gy2 = q2.y + ny * lo;
+      /* 标签：沿这条线（再向外 3px 的平行线）从起点开始排字 */
+      const lo = pairN > 1 ? (o.seq === 0 ? 9 : -9) : 9;
+      let gx1 = p1.x + anx * lo, gy1 = p1.y + any * lo;
+      let gx2 = p2.x + anx * lo, gy2 = p2.y + any * lo;
       if (gx2 < gx1) {
         const tx0 = gx1, ty0 = gy1;
         gx1 = gx2; gy1 = gy2; gx2 = tx0; gy2 = ty0;
       }
-      /* 引导线不够长时向两端延长，避免 textPath 把文字截断 */
+      /* 引导线不够长时向两端延长，避免 textPath 在起点 14px 之后放不下文字 */
       const tw = mctx.measureText(o.L.l).width + 10;
+      const need = tw + 28;
       const glen = Math.hypot(gx2 - gx1, gy2 - gy1) || 1;
-      if (glen < tw) {
+      if (glen < need) {
         const ux = (gx2 - gx1) / glen, uy = (gy2 - gy1) / glen;
-        const ext = (tw - glen) / 2;
+        const ext = (need - glen) / 2;
         gx1 -= ux * ext; gy1 -= uy * ext; gx2 += ux * ext; gy2 += uy * ext;
       }
-      pathLabel(g, `M${gx1},${gy1} L${gx2},${gy2}`, o.L.l, kind.color, linkVisible[o.L.k], startOffset);
+      pathLabel(g, `M${gx1},${gy1} L${gx2},${gy2}`, o.L.l, kind.color, linkVisible[o.L.k]);
       maxRight = Math.max(maxRight, q1.x, q2.x, gx2 + 30);
     });
     return maxRight - ox;
@@ -756,7 +759,7 @@
   };
 
   /* ---------- 版本号：页面版 vs 脚本版，两者不一致说明脚本被缓存 ---------- */
-  const BUILD = 'v2026.11.06-1635';
+  const BUILD = 'v2026.11.06-1640';
   const vp = document.getElementById('verPage');
   const vj = document.getElementById('verJs');
   if (vp && vj) {
